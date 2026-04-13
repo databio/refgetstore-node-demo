@@ -3,16 +3,73 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { RefgetStore } from "@databio/gtars-node";
 
+const storeUrl = process.env.REFGET_STORE_URL;
 const storePath = process.env.REFGET_STORE_PATH;
-if (!storePath) {
-  console.error("REFGET_STORE_PATH environment variable is required");
+
+if (!storeUrl && !storePath) {
+  console.error("REFGET_STORE_URL or REFGET_STORE_PATH environment variable is required");
   process.exit(1);
 }
 
-const store = RefgetStore.openLocal(storePath);
+const cachePath = process.env.REFGET_CACHE_PATH || "/tmp/refgetstore_cache";
+const store = storeUrl
+  ? RefgetStore.openRemote(cachePath, storeUrl)
+  : RefgetStore.openLocal(storePath!);
 const app = new Hono();
 
 app.use("*", cors());
+
+// --- Root / Index ---
+
+app.get("/", (c) => {
+  const s = store.stats();
+  const baseUrl = new URL(c.req.url).origin;
+  return c.html(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RefgetStore Server</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #333; line-height: 1.6; }
+    h1 { color: #1a1a2e; }
+    .stats { background: #f4f4f8; padding: 16px; border-radius: 8px; margin: 16px 0; }
+    .stats span { font-weight: bold; color: #16213e; }
+    a { color: #0f3460; }
+    code { background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+    th { background: #f4f4f8; }
+  </style>
+</head>
+<body>
+  <h1>RefgetStore Server</h1>
+  <div class="stats">
+    <span>${s.nSequences.toLocaleString()}</span> sequences &middot;
+    <span>${s.nCollections.toLocaleString()}</span> collections &middot;
+    Storage: <span>${s.storageMode}</span>
+  </div>
+
+  <h2>API Endpoints</h2>
+  <table>
+    <tr><th>Endpoint</th><th>Description</th></tr>
+    <tr><td><a href="/service-info">/service-info</a></td><td>Server metadata</td></tr>
+    <tr><td><a href="/collection">/collection</a></td><td>List all sequence collections</td></tr>
+    <tr><td><code>/collection/:digest</code></td><td>Get a collection by digest</td></tr>
+    <tr><td><code>/collection/:digest/metadata</code></td><td>Collection metadata</td></tr>
+    <tr><td><a href="/sequence?limit=10">/sequence?limit=10</a></td><td>List sequences (paginated)</td></tr>
+    <tr><td><code>/sequence/:digest</code></td><td>Get sequence bases by digest</td></tr>
+    <tr><td><code>/sequence/:digest/metadata</code></td><td>Sequence metadata</td></tr>
+  </table>
+
+  <h2>GA4GH Standards</h2>
+  <p>
+    This server implements the <a href="https://samtools.github.io/hts-specs/refget.html">GA4GH Refget v2</a>
+    and <a href="https://ga4gh.github.io/seqcol-spec/">Sequence Collections</a> specifications,
+    backed by a <a href="https://refgenie.org/refget/refgetstore/">RefgetStore</a>.
+  </p>
+</body>
+</html>`);
+});
 
 // --- Service Info ---
 
@@ -28,7 +85,6 @@ app.get("/service-info", (c) => {
       nSequences: s.nSequences,
       nCollections: s.nCollections,
       storageMode: s.storageMode,
-      totalDiskSize: s.totalDiskSize,
     },
   });
 });
@@ -121,7 +177,7 @@ app.get("/sequence/service-info", (c) => {
 app.get("/collection", (c) => {
   const collections = store.listCollections();
   return c.json(
-    collections.map((col) => ({
+    collections.map((col: any) => ({
       digest: col.digest,
       nSequences: col.nSequences,
       namesDigest: col.namesDigest,
@@ -161,18 +217,24 @@ app.get("/collection/:digest/metadata", (c) => {
   });
 });
 
-// --- List sequences ---
+// --- List sequences (paginated) ---
 
 app.get("/sequence", (c) => {
+  const limit = Math.min(parseInt(c.req.query("limit") || "100", 10), 1000);
+  const offset = parseInt(c.req.query("offset") || "0", 10);
   const sequences = store.listSequences();
-  return c.json(
-    sequences.map((seq) => ({
+  const page = sequences.slice(offset, offset + limit);
+  return c.json({
+    items: page.map((seq: any) => ({
       name: seq.name,
       length: seq.length,
       sha512t24u: seq.sha512T24U,
       md5: seq.md5,
-    }))
-  );
+    })),
+    total: sequences.length,
+    limit,
+    offset,
+  });
 });
 
 // --- Start server ---
@@ -181,7 +243,7 @@ const port = parseInt(process.env.PORT || "3000", 10);
 
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(`RefgetStore server listening on http://localhost:${info.port}`);
-  console.log(`Store: ${storePath}`);
+  console.log(`Store: ${storeUrl || storePath}`);
   const s = store.stats();
   console.log(
     `  ${s.nSequences} sequences, ${s.nCollections} collections`
