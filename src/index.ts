@@ -150,7 +150,7 @@ app.get("/sequence/:digest", (c) => {
   const meta = store.getSequenceMetadata(digest);
   if (!meta) return c.json({ error: "Not Found" }, 404);
 
-  const fullLen = meta.length;
+  const fullLen = Number(meta.length);
   const isPartial = parsed.source !== "none";
   const s = parsed.start ?? 0;
   const e = parsed.end ?? fullLen;
