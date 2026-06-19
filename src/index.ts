@@ -2,19 +2,40 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { RefgetStore } from "@databio/gtars-node";
+import { Readable } from "node:stream";
+import { loadConfig } from "./config.js";
+import { parseRangeRequest } from "./range.js";
 
-const storeUrl = process.env.REFGET_STORE_URL;
-const storePath = process.env.REFGET_STORE_PATH;
+const config = loadConfig();
 
-if (!storeUrl && !storePath) {
-  console.error("REFGET_STORE_URL or REFGET_STORE_PATH environment variable is required");
-  process.exit(1);
+const store = config.storeUrl
+  ? RefgetStore.openRemote(config.cachePath, config.storeUrl)
+  : RefgetStore.openLocal(config.storePath!);
+
+const stats = store.stats();
+const storageMode = stats.storageMode; // "Raw" | "Encoded"
+
+// Resolve effective per-request behavior once at startup
+let effectiveBehavior: "redirect" | "stream";
+switch (config.proxyMode) {
+  case "stream-only":
+    effectiveBehavior = "stream";
+    break;
+  case "redirect-only":
+    if (storageMode !== "Raw") {
+      console.error(
+        `Configuration error: REFGET_PROXY_MODE=redirect-only requires a Raw-mode store, ` +
+          `but the store is ${storageMode}`,
+      );
+      process.exit(1);
+    }
+    effectiveBehavior = "redirect";
+    break;
+  case "auto":
+    effectiveBehavior = storageMode === "Raw" ? "redirect" : "stream";
+    break;
 }
 
-const cachePath = process.env.REFGET_CACHE_PATH || "/tmp/refgetstore_cache";
-const store = storeUrl
-  ? RefgetStore.openRemote(cachePath, storeUrl)
-  : RefgetStore.openLocal(storePath!);
 const app = new Hono();
 
 app.use("*", cors());
@@ -23,7 +44,6 @@ app.use("*", cors());
 
 app.get("/", (c) => {
   const s = store.stats();
-  const baseUrl = new URL(c.req.url).origin;
   return c.html(`<!DOCTYPE html>
 <html>
 <head>
@@ -34,6 +54,7 @@ app.get("/", (c) => {
     h1 { color: #1a1a2e; }
     .stats { background: #f4f4f8; padding: 16px; border-radius: 8px; margin: 16px 0; }
     .stats span { font-weight: bold; color: #16213e; }
+    .stats .row { display: block; }
     a { color: #0f3460; }
     code { background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
     table { border-collapse: collapse; width: 100%; margin: 16px 0; }
@@ -44,9 +65,10 @@ app.get("/", (c) => {
 <body>
   <h1>RefgetStore Server</h1>
   <div class="stats">
-    <span>${s.nSequences.toLocaleString()}</span> sequences &middot;
-    <span>${s.nCollections.toLocaleString()}</span> collections &middot;
-    Storage: <span>${s.storageMode}</span>
+    <span class="row"><span>${s.nSequences.toLocaleString()}</span> sequences &middot;
+    <span>${s.nCollections.toLocaleString()}</span> collections</span>
+    <span class="row">Storage: <span>${s.storageMode}</span> &middot;
+    Proxy: <span>${effectiveBehavior}</span></span>
   </div>
 
   <h2>API Endpoints</h2>
@@ -56,8 +78,8 @@ app.get("/", (c) => {
     <tr><td><a href="/collection">/collection</a></td><td>List all sequence collections</td></tr>
     <tr><td><code>/collection/:digest</code></td><td>Get a collection by digest</td></tr>
     <tr><td><code>/collection/:digest/metadata</code></td><td>Collection metadata</td></tr>
-    <tr><td><a href="/sequence?limit=10">/sequence?limit=10</a></td><td>List sequences (paginated)</td></tr>
-    <tr><td><code>/sequence/:digest</code></td><td>Get sequence bases by digest</td></tr>
+    <tr><td><a href="/sequence">/sequence</a></td><td>List sequences (skipped for large stores)</td></tr>
+    <tr><td><code>/sequence/:digest</code></td><td>Get sequence bases by digest (${effectiveBehavior})</td></tr>
     <tr><td><code>/sequence/:digest/metadata</code></td><td>Sequence metadata</td></tr>
   </table>
 
@@ -85,6 +107,7 @@ app.get("/service-info", (c) => {
       nSequences: s.nSequences,
       nCollections: s.nCollections,
       storageMode: s.storageMode,
+      proxyBehavior: effectiveBehavior,
     },
   });
 });
@@ -93,56 +116,71 @@ app.get("/service-info", (c) => {
 
 app.get("/sequence/:digest", (c) => {
   const { digest } = c.req.param();
-  const startParam = c.req.query("start");
-  const endParam = c.req.query("end");
+  const parsed = parseRangeRequest(c);
 
-  // Check Range header as alternative to query params
-  const rangeHeader = c.req.header("Range");
-  let start: number | undefined;
-  let end: number | undefined;
-
-  if (startParam !== undefined || endParam !== undefined) {
-    start = startParam !== undefined ? parseInt(startParam, 10) : undefined;
-    end = endParam !== undefined ? parseInt(endParam, 10) : undefined;
-  } else if (rangeHeader) {
-    const match = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
-    if (match) {
-      start = parseInt(match[1], 10);
-      end = match[2] ? parseInt(match[2], 10) + 1 : undefined; // Range is inclusive, API is exclusive
+  // Redirect branch
+  if (effectiveBehavior === "redirect") {
+    if (parsed.source === "query" && !config.allowQueryParamPartials) {
+      return c.json(
+        {
+          error: "Bad Request",
+          message:
+            "This server proxies raw sequence bytes by redirect. Use the HTTP Range header " +
+            "(e.g. `Range: bytes=0-999`) for partial content. Query-param partials (?start=&end=) " +
+            "are not supported in redirect mode. Set REFGET_ALLOW_QUERY_PARAM_PARTIALS=true to " +
+            "enable streaming fallback for these requests.",
+        },
+        400,
+      );
     }
-  }
 
-  try {
-    let sequence: string;
-    let statusCode = 200;
-
-    if (start !== undefined || end !== undefined) {
-      // Partial sequence - need metadata for defaults
+    if (parsed.source !== "query") {
+      // Full request or Range header: redirect
       const meta = store.getSequenceMetadata(digest);
-      if (!meta) {
-        return c.json({ error: "Not Found" }, 404);
-      }
-      const s = start ?? 0;
-      const e = end ?? meta.length;
-      if (s >= e || s < 0 || e > meta.length) {
-        return c.json({ error: "Range Not Satisfiable" }, 416);
-      }
-      sequence = store.getSubstring(digest, s, e);
-      statusCode = 206;
-    } else {
-      sequence = store.getSequence(digest);
-    }
+      if (!meta) return c.json({ error: "Not Found" }, 404);
 
-    return new Response(sequence, {
-      status: statusCode,
-      headers: {
-        "Content-Type": "text/vnd.ga4gh.refget.v2.0.0+plain",
-        "Content-Length": String(sequence.length),
-      },
-    });
-  } catch {
-    return c.json({ error: "Not Found" }, 404);
+      const storeBase = config.storeUrl!.replace(/\/+$/, "");
+      const target = `${storeBase}/sequences/${digest.slice(0, 2)}/${digest}.seq`;
+      return c.redirect(target, 302);
+    }
+    // Fall through to streaming branch for query-param partials
   }
+
+  // Streaming branch
+  const meta = store.getSequenceMetadata(digest);
+  if (!meta) return c.json({ error: "Not Found" }, 404);
+
+  const fullLen = meta.length;
+  const isPartial = parsed.source !== "none";
+  const s = parsed.start ?? 0;
+  const e = parsed.end ?? fullLen;
+
+  if (isPartial && (s >= e || s < 0 || e > fullLen)) {
+    return c.json({ error: "Range Not Satisfiable" }, 416);
+  }
+
+  const nodeStream: Readable = store.streamSequence(
+    digest,
+    isPartial ? s : undefined,
+    isPartial ? e : undefined,
+  );
+  nodeStream.on("error", (err) => {
+    console.error(`streamSequence error for ${digest}:`, err);
+  });
+
+  const contentLength = e - s;
+  const headers: Record<string, string> = {
+    "Content-Type": "text/vnd.ga4gh.refget.v2.0.0+plain",
+    "Content-Length": String(contentLength),
+  };
+  if (isPartial) {
+    headers["Content-Range"] = `bytes ${s}-${e - 1}/${fullLen}`;
+  }
+
+  return new Response(
+    Readable.toWeb(nodeStream) as unknown as ReadableStream,
+    { status: isPartial ? 206 : 200, headers },
+  );
 });
 
 app.get("/sequence/:digest/metadata", (c) => {
@@ -183,7 +221,7 @@ app.get("/collection", (c) => {
       namesDigest: col.namesDigest,
       sequencesDigest: col.sequencesDigest,
       lengthsDigest: col.lengthsDigest,
-    }))
+    })),
   );
 });
 
@@ -217,35 +255,44 @@ app.get("/collection/:digest/metadata", (c) => {
   });
 });
 
-// --- List sequences (paginated) ---
+// --- List sequences (large-store guard) ---
+
+const SEQUENCE_LIST_LIMIT = 10000;
 
 app.get("/sequence", (c) => {
-  const limit = Math.min(parseInt(c.req.query("limit") || "100", 10), 1000);
-  const offset = parseInt(c.req.query("offset") || "0", 10);
+  const s = store.stats();
+  if (s.nSequences > SEQUENCE_LIST_LIMIT) {
+    return c.json({
+      message:
+        `Store contains ${s.nSequences} sequences; listing is disabled for large stores ` +
+        `(> ${SEQUENCE_LIST_LIMIT}). Fetch sequences by digest via /sequence/:digest.`,
+      nSequences: s.nSequences,
+    });
+  }
   const sequences = store.listSequences();
-  const page = sequences.slice(offset, offset + limit);
   return c.json({
-    items: page.map((seq: any) => ({
+    items: sequences.map((seq: any) => ({
       name: seq.name,
       length: seq.length,
       sha512t24u: seq.sha512T24U,
       md5: seq.md5,
     })),
     total: sequences.length,
-    limit,
-    offset,
   });
 });
 
 // --- Start server ---
 
-const port = parseInt(process.env.PORT || "3000", 10);
-
-serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`RefgetStore server listening on http://localhost:${info.port}`);
-  console.log(`Store: ${storeUrl || storePath}`);
-  const s = store.stats();
+serve({ fetch: app.fetch, port: config.port }, (info) => {
+  console.log(`RefgetStore proxy started`);
+  console.log(`  listening: http://localhost:${info.port}`);
+  console.log(`  store: ${config.storeUrl || config.storePath}`);
+  console.log(`  storage mode: ${storageMode}`);
+  console.log(`  proxy behavior: ${effectiveBehavior}`);
   console.log(
-    `  ${s.nSequences} sequences, ${s.nCollections} collections`
+    `  query-param partials: ${config.allowQueryParamPartials ? "honored (stream fallback)" : "rejected in redirect mode"}`,
+  );
+  console.log(
+    `  ${stats.nSequences} sequences, ${stats.nCollections} collections`,
   );
 });
