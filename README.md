@@ -117,6 +117,12 @@ docker run -p 80:80 \
 
 ## Comparison to seqcolapi
 
+[**seqcolapi**](https://github.com/refgenie/refget/tree/master/seqcolapi) is the companion
+server in the refget ecosystem: a Python/FastAPI implementation of the
+[GA4GH Sequence Collections API](https://ga4gh.github.io/refget/seqcols/) (collection
+metadata and comparison). It ships as part of the [`refget`](https://github.com/refgenie/refget)
+Python package and runs in production at [seqcolapi.databio.org](https://seqcolapi.databio.org).
+
 Both `seqcolapi` and this server speak the GA4GH refget + seqcol APIs, and both can be
 backed by a RefgetStore. The meaningful difference is **what they serve**, not where they
 store it:
