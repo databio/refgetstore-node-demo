@@ -4,13 +4,11 @@
 
 ## What is this?
 
-This is an implementation of the [**GA4GH Refget Sequences API**](https://ga4gh.github.io/refget/) — the standard for retrieving reference sequences by digest — that serves its data **from a [RefgetStore](https://refgenie.org/refget/refgetstore-explained/) instead of a conventional database.** That's the whole point of the demo: you can run a standards-compliant refget sequences server directly on top of a content-addressable, file-based store, with no SQL database, no ORM, and no bulk-loading step.
+This implements the [**GA4GH Refget Sequences API**](https://ga4gh.github.io/refget/), the standard for retrieving reference sequences by digest. The point of the demo is that it serves data **from a [RefgetStore](https://refgenie.org/refget/refgetstore-explained/) instead of a conventional database**: a standards-compliant refget server running directly on a content-addressable, file-based store, with no SQL database, no ORM, and no bulk-loading step.
 
-A [**RefgetStore**](https://refgenie.org/refget/refgetstore-explained/) is a content-addressable, file-based database for biological sequences and sequence collections. Sequences are looked up by their GA4GH digest, stored with deduplication and compact encoding, and the whole store can live on local disk or on static object storage like S3 — no database server required. It's implemented in Rust in the [`gtars`](https://github.com/databio/gtars) project (the [`gtars-refget`](https://github.com/databio/gtars/tree/master/gtars-refget) crate) and exposed to JavaScript through the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings — which is what this server uses to read sequences.
+A [**RefgetStore**](https://refgenie.org/refget/refgetstore-explained/) is a content-addressable, file-based database for biological sequences and sequence collections. Sequences are looked up by GA4GH digest and stored with deduplication and compact encoding, and the store can live on local disk or on static object storage like S3 without a database server. It is written in Rust in the [`gtars`](https://github.com/databio/gtars) project (the [`gtars-refget`](https://github.com/databio/gtars/tree/master/gtars-refget) crate) and exposed to JavaScript through the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings, which is what this server uses to read sequences.
 
-So this repo answers a specific question: **how do you build a GA4GH Refget Sequences API server backed by a RefgetStore?** It's a reference example to learn from and adapt, not something to deploy as-is.
-
-The server is a lightweight **proxy** that never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response (see [How it works](#how-it-works)). It also exposes read-only [sequence collection](https://ga4gh.github.io/refget/seqcols/) endpoints (collection listing and metadata) as a convenience, but serving sequences is the point — and the seqcol *comparison* endpoint is not implemented.
+The server is a lightweight **proxy** that never holds sequence bytes in memory. It either redirects raw-store bytes to the backing store or stream-decodes packed bytes directly to the HTTP response (see [How it works](#how-it-works)). It also exposes read-only [sequence collection](https://ga4gh.github.io/refget/seqcols/) endpoints (listing and metadata) as a convenience, but serving sequences is the point; the seqcol *comparison* endpoint is not implemented.
 
 **Learn more about RefgetStore:**
 
@@ -32,7 +30,7 @@ bash demo_up.sh
 
 The server proxies sequence bytes in one of two ways, depending on how the backing RefgetStore is stored:
 
-- **Redirect (Raw-mode stores).** The server returns `302` with a `Location` header pointing at `<REFGET_STORE_URL>/sequences/<digest[0:2]>/<digest>.seq`. Clients follow the redirect and hit the backing store (typically S3) directly. Range headers on the original request flow through to the backing store, which responds with `206 Partial Content`. The server never loads bytes. Query-param partials (`?start=&end=`) are rejected by default — use the `Range` header.
+- **Redirect (Raw-mode stores).** The server returns `302` with a `Location` header pointing at `<REFGET_STORE_URL>/sequences/<digest[0:2]>/<digest>.seq`. Clients follow the redirect and hit the backing store (typically S3) directly. Range headers on the original request flow through to the backing store, which responds with `206 Partial Content`. The server never loads bytes. Query-param partials (`?start=&end=`) are rejected by default; use the `Range` header.
 - **Stream-decode (Encoded-mode stores).** Stored bytes are 2-bit/3-bit packed; they cannot be redirected verbatim. The server calls `RefgetStore.streamSequence(digest, start, end)` which returns a `Readable` of decoded ASCII bases, piped directly to the HTTP response. Memory use is bounded by the stream's internal buffer regardless of sequence size.
 
 ### Proxy mode matrix
@@ -123,9 +121,7 @@ server in the refget ecosystem: a Python/FastAPI implementation of the
 metadata and comparison). It ships as part of the [`refget`](https://github.com/refgenie/refget)
 Python package and runs in production at [seqcolapi.databio.org](https://seqcolapi.databio.org).
 
-Both `seqcolapi` and this server speak the GA4GH refget + seqcol APIs, and both can be
-backed by a RefgetStore. The meaningful difference is **what they serve**, not where they
-store it:
+Both speak the GA4GH refget and seqcol APIs, and both can be backed by a RefgetStore. The difference is **what they serve**, not where they store it:
 
 | | seqcolapi | refgetstore-server (this repo) |
 |---|---|---|
@@ -134,15 +130,12 @@ store it:
 | Collection metadata (`/collection`) | ✅ | ✅ |
 | Collection comparison (`/comparison`) | ✅ | ❌ (pending napi binding) |
 | FASTA DRS / pangenome endpoints | ✅ | ❌ |
-| Raw sequence residues (`GET /sequence/:digest` → bases) | ❌ deliberately disabled | ✅ its whole purpose |
-| Sequence delivery | n/a — does not serve residues | 302-redirect to the backing store, or stream-decode; never buffers bytes |
+| Raw sequence residues (`GET /sequence/:digest` → bases) | ❌ not served | ✅ primary purpose |
+| Sequence delivery | n/a | 302-redirect to the backing store, or stream-decode; never buffers bytes |
 
-In short: **seqcolapi is a sequence-collection metadata and comparison service** — it does
-not hand out sequence bases. **This server is a lightweight residue-delivery proxy** — it
-streams or redirects the actual bytes of a sequence out of a (possibly S3-backed)
-RefgetStore, with no database and no Python.
+In short: **seqcolapi serves sequence-collection metadata and comparisons**, not sequence bases. **This server serves the sequence bases themselves**, streaming or redirecting them out of a (possibly S3-backed) RefgetStore with no database and no Python.
 
 ## Known Limitations
 
-- No comparison endpoint (`/comparison/:digest1/:digest2`) — pending napi binding support
+- No comparison endpoint (`/comparison/:digest1/:digest2`), pending napi binding support
 - Read-only: store must be pre-built from FASTA files
