@@ -87,7 +87,7 @@ app.get("/", (c) => {
   <p>
     This server implements the <a href="https://samtools.github.io/hts-specs/refget.html">GA4GH Refget v2</a>
     and <a href="https://ga4gh.github.io/seqcol-spec/">Sequence Collections</a> specifications,
-    backed by a <a href="https://refgenie.org/refget/refgetstore/">RefgetStore</a>.
+    backed by a <a href="https://refgenie.org/refget/refgetstore-explained/">RefgetStore</a>.
   </p>
 </body>
 </html>`);

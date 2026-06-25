@@ -1,6 +1,6 @@
 # RefgetStore Node Server
 
-A lightweight Node.js **proxy** for GA4GH refget sequences and sequence collections APIs, backed by a [RefgetStore](https://refgenie.org/refget/refgetstore/). The server never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response.
+A lightweight Node.js **proxy** for GA4GH refget sequences and sequence collections APIs, backed by a [RefgetStore](https://refgenie.org/refget/refgetstore-explained/). The server never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response.
 
 ## Quick Start
 
@@ -11,18 +11,6 @@ npm run build
 # Run the demo (builds a store from test FASTAs and starts the server)
 bash demo_up.sh
 ```
-
-## Live Demo
-
-A demo server backed by the pangenome jungle RefgetStore runs at:
-
-**http://ecs.databio.org:8150/**
-
-Example links:
-
-- [Service info](http://ecs.databio.org:8150/service-info)
-- [List collections](http://ecs.databio.org:8150/collection)
-- [Get a collection](http://ecs.databio.org:8150/collection/-Ffl-8v7R0Wh53_pRA4WtKoDQL9GmC-v)
 
 ## How it works
 
@@ -113,12 +101,24 @@ docker run -p 80:80 \
 
 ## Comparison to seqcolapi
 
-| | seqcolapi | refgetstore-server |
+Both `seqcolapi` and this server speak the GA4GH refget + seqcol APIs, and both can be
+backed by a RefgetStore. The meaningful difference is **what they serve**, not where they
+store it:
+
+| | seqcolapi | refgetstore-server (this repo) |
 |---|---|---|
 | Runtime | Python + FastAPI | Node.js + Hono |
-| Storage | PostgreSQL | RefgetStore (flat files, local or S3) |
-| Infrastructure | Database server required | Single binary store on disk / object store |
-| Sequence delivery | Reads DB, builds response in Python | Redirect or stream-decode; no bytes buffered |
+| Storage | PostgreSQL **or** RefgetStore (local/S3) | RefgetStore only (local/S3) |
+| Collection metadata (`/collection`) | ✅ | ✅ |
+| Collection comparison (`/comparison`) | ✅ | ❌ (pending napi binding) |
+| FASTA DRS / pangenome endpoints | ✅ | ❌ |
+| Raw sequence residues (`GET /sequence/:digest` → bases) | ❌ deliberately disabled | ✅ its whole purpose |
+| Sequence delivery | n/a — does not serve residues | 302-redirect to the backing store, or stream-decode; never buffers bytes |
+
+In short: **seqcolapi is a sequence-collection metadata and comparison service** — it does
+not hand out sequence bases. **This server is a lightweight residue-delivery proxy** — it
+streams or redirects the actual bytes of a sequence out of a (possibly S3-backed)
+RefgetStore, with no database and no Python.
 
 ## Known Limitations
 
