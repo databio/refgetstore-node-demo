@@ -1,4 +1,4 @@
-# RefgetStore Node Server
+# Demo: a Refget Sequences API service backed by RefgetStore
 
 > ⚠️ **Beta software / demo.** This is a reference example, not a production service. It exists to show how to stand up a [GA4GH Refget Sequences](https://ga4gh.github.io/refget/) API in Node.js backed by a RefgetStore, using the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings. Expect rough edges and breaking changes.
 
