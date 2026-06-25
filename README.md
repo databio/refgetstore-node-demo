@@ -1,16 +1,16 @@
 # RefgetStore Node Server
 
-> ⚠️ **Beta software / demo.** This is an example project, not a production service. It exists to show how to build a refget server in Node.js on top of the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings. Expect rough edges and breaking changes.
+> ⚠️ **Beta software / demo.** This is a reference example, not a production service. It exists to show how to stand up a [GA4GH Refget Sequences](https://ga4gh.github.io/refget/) API in Node.js backed by a RefgetStore, using the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings. Expect rough edges and breaking changes.
 
 ## What is this?
 
-A small, self-contained example server that serves [GA4GH refget](https://ga4gh.github.io/refget/) sequences and sequence collections over HTTP, backed by a **RefgetStore**.
+This is an implementation of the [**GA4GH Refget Sequences API**](https://ga4gh.github.io/refget/) — the standard for retrieving reference sequences by digest — that serves its data **from a [RefgetStore](https://refgenie.org/refget/refgetstore-explained/) instead of a conventional database.** That's the whole point of the demo: you can run a standards-compliant refget sequences server directly on top of a content-addressable, file-based store, with no SQL database, no ORM, and no bulk-loading step.
 
-A [**RefgetStore**](https://refgenie.org/refget/refgetstore-explained/) is a content-addressable, file-based database for biological sequences and sequence collections (genome assemblies, transcriptomes, etc.). Sequences are looked up by their GA4GH digest, stored with deduplication and compact encoding, and the whole store can live on local disk or on static object storage like S3 — no database server required. It's implemented in Rust in the [`gtars`](https://github.com/databio/gtars) project (the [`gtars-refget`](https://github.com/databio/gtars/tree/master/gtars-refget) crate) and exposed to JavaScript through the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings.
+A [**RefgetStore**](https://refgenie.org/refget/refgetstore-explained/) is a content-addressable, file-based database for biological sequences and sequence collections. Sequences are looked up by their GA4GH digest, stored with deduplication and compact encoding, and the whole store can live on local disk or on static object storage like S3 — no database server required. It's implemented in Rust in the [`gtars`](https://github.com/databio/gtars) project (the [`gtars-refget`](https://github.com/databio/gtars/tree/master/gtars-refget) crate) and exposed to JavaScript through the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings — which is what this server uses to read sequences.
 
-**This repo demonstrates those Node bindings**: how to open a RefgetStore (local or remote/S3) from Node and serve its sequences and collections through a standard refget API. It's a reference example to learn from and adapt, not something to deploy as-is.
+So this repo answers a specific question: **how do you build a GA4GH Refget Sequences API server backed by a RefgetStore?** It's a reference example to learn from and adapt, not something to deploy as-is.
 
-Under the hood it's a lightweight **proxy** that never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response (see [How it works](#how-it-works)).
+The server is a lightweight **proxy** that never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response (see [How it works](#how-it-works)). It also exposes read-only [sequence collection](https://ga4gh.github.io/refget/seqcols/) endpoints (collection listing and metadata) as a convenience, but serving sequences is the point — and the seqcol *comparison* endpoint is not implemented.
 
 **Learn more about RefgetStore:**
 
