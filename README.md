@@ -1,6 +1,22 @@
 # RefgetStore Node Server
 
-A lightweight Node.js **proxy** for GA4GH refget sequences and sequence collections APIs, backed by a [RefgetStore](https://refgenie.org/refget/refgetstore-explained/). The server never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response.
+> ⚠️ **Beta software / demo.** This is an example project, not a production service. It exists to show how to build a refget server in Node.js on top of the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings. Expect rough edges and breaking changes.
+
+## What is this?
+
+A small, self-contained example server that serves [GA4GH refget](https://ga4gh.github.io/refget/) sequences and sequence collections over HTTP, backed by a **RefgetStore**.
+
+A [**RefgetStore**](https://refgenie.org/refget/refgetstore-explained/) is a content-addressable, file-based database for biological sequences and sequence collections (genome assemblies, transcriptomes, etc.). Sequences are looked up by their GA4GH digest, stored with deduplication and compact encoding, and the whole store can live on local disk or on static object storage like S3 — no database server required. It's implemented in Rust in the [`gtars`](https://github.com/databio/gtars) project (the [`gtars-refget`](https://github.com/databio/gtars/tree/master/gtars-refget) crate) and exposed to JavaScript through the [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) bindings.
+
+**This repo demonstrates those Node bindings**: how to open a RefgetStore (local or remote/S3) from Node and serve its sequences and collections through a standard refget API. It's a reference example to learn from and adapt, not something to deploy as-is.
+
+Under the hood it's a lightweight **proxy** that never materializes sequence bytes in memory — it either redirects raw-store bytes to the backing store or stream-decodes encoded-store bytes directly to the HTTP response (see [How it works](#how-it-works)).
+
+**Learn more about RefgetStore:**
+
+- [What is RefgetStore?](https://refgenie.org/refget/refgetstore-explained/) — overview, concepts, and the full list of components
+- [`@databio/gtars-node`](https://www.npmjs.com/package/@databio/gtars-node) — the Node.js bindings this server is built on ([source](https://github.com/databio/gtars/tree/master/gtars-node))
+- [`gtars`](https://github.com/databio/gtars) — the Rust engine behind it all
 
 ## Quick Start
 
